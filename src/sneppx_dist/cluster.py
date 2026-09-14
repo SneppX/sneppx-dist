@@ -7,6 +7,8 @@ user runs it in a torchrun-compatible environment.
 
 import json
 import pathlib
+import socket
+import sys
 
 
 class ClusterError(Exception):
@@ -18,6 +20,16 @@ _DEFAULT_CONFIG = "sneppx-dist.json"
 _BACKENDS = {"nccl", "gloo", "mpi"}
 
 _STATES = {"created", "running", "stopped"}
+
+
+def detect_backend():
+    """Return the recommended distributed backend for this platform.
+
+    NCCL requires Linux + NVIDIA GPUs. Gloo works everywhere but is slower.
+    """
+    if sys.platform.startswith("linux"):
+        return "nccl"
+    return "gloo"
 
 
 class Cluster:
@@ -43,12 +55,16 @@ class Cluster:
 
     def init(self, *, world_size=None, gpus_per_node=None,
              master_addr="127.0.0.1", master_port=29500,
-             backend="nccl", config=None):
-        """Create a fresh cluster config (rejects if already ``running``)."""
+             backend=None, config=None):
+        """Create a fresh cluster config (rejects if already ``running``).
+
+        If *backend* is not supplied, ``detect_backend()`` selects nccl
+        on Linux and gloo on Windows/macOS.
+        """
         if self._data and self._data.get("state") == "running":
             raise ClusterError("cluster already running; call teardown first")
 
-        backend = backend.lower()
+        backend = (backend or detect_backend()).lower()
         if backend not in _BACKENDS:
             raise ClusterError(f"unknown backend: {backend} (expected one of {_BACKENDS})")
 
@@ -116,6 +132,68 @@ class Cluster:
         if script_args:
             cmd.extend(script_args)
         return cmd
+
+    # -- connectivity check -------------------------------------------------
+
+    def check(self):
+        """Attempt a TCP connect to master_addr:master_port.
+
+        Returns ``{"reachable": bool, "master": ..., "port": ...}`` with
+        per-node results aggregated.
+        """
+        if self._data is None:
+            raise ClusterError("no config; run init first")
+        try:
+            sock = socket.create_connection(
+                (self._data["master_addr"], self._data["master_port"]),
+                timeout=3,
+            )
+            sock.close()
+            reachable = True
+        except OSError:
+            reachable = False
+        return {
+            "reachable": reachable,
+            "master": self._data["master_addr"],
+            "port": self._data["master_port"],
+        }
+
+    # -- launcher rendering -------------------------------------------------
+
+    def render_launcher(self, path, script, script_args=None):
+        """Write a runnable shell/powershell launcher to *path*.
+
+        The file is a self-contained script that executes the
+        ``torchrun`` command for the saved cluster config + *script*.
+        If *path* ends in ``.ps1`` a PowerShell script is generated;
+        otherwise a Bash script is written.
+        """
+        path = pathlib.Path(path)
+        cmd = self.launch_command(script, script_args)
+        if path.suffix.lower() == ".ps1":
+            escaped = []
+            for c in cmd:
+                if " " in c or ";" in c:
+                    escaped.append(f'"{c}"')
+                else:
+                    escaped.append(c)
+            lines = [
+                "#!/usr/bin/env pwsh",
+                "Set-StrictMode -Version Latest",
+                "$ErrorActionPreference='Stop'",
+                "",
+                "& " + " ".join(escaped) + ' @args',
+            ]
+        else:
+            lines = [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                "",
+                "exec \\" ]
+            lines.append("  " + " ".join(cmd) + ' "$@"')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
 
     # -- helpers ------------------------------------------------------------
 
