@@ -118,6 +118,14 @@ class Cluster:
         self._save()
         return self.status()
 
+    def reset(self):
+        """Reset cluster state to ``created`` (from ``stopped`` or ``running``)."""
+        if self._data is None:
+            raise ClusterError("no config; run init first")
+        self._data["state"] = "created"
+        self._save()
+        return self.status()
+
     # -- torchrun command generation ----------------------------------------
 
     def launch_command(self, script, script_args=None):
