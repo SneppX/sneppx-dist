@@ -54,12 +54,15 @@ class Cluster:
     # -- init --------------------------------------------------------------
 
     def init(self, *, world_size=None, gpus_per_node=None,
-             master_addr="127.0.0.1", master_port=29500,
-             backend=None, config=None):
+         master_addr="127.0.0.1", master_port=29500,
+         backend=None, config=None):
         """Create a fresh cluster config (rejects if already ``running``).
 
         If *backend* is not supplied, ``detect_backend()`` selects nccl
         on Linux and gloo on Windows/macOS.
+
+        `world_size` = ``gpus_per_node`` × ``nodes`` when ``gpus_per_node`` is set,
+        otherwise `world_size` is used directly (or defaults to 1).
         """
         if self._data and self._data.get("state") == "running":
             raise ClusterError("cluster already running; call teardown first")
@@ -68,10 +71,13 @@ class Cluster:
         if backend not in _BACKENDS:
             raise ClusterError(f"unknown backend: {backend} (expected one of {_BACKENDS})")
 
-        world_size = world_size or gpus_per_node or 1
+        if gpus_per_node is not None:
+            world_size = world_size or gpus_per_node
+        else:
+            world_size = world_size or 1
         nodes = []
         for i in range(world_size):
-            nodes.append({"rank": i, "gpus": 1, "node": f"node-{i}", "address": master_addr})
+            nodes.append({"rank": i, "gpus": (gpus_per_node or 1), "node": f"node-{i}", "address": master_addr})
 
         self._data = {
             "format": "sneppx-dist-cluster",
