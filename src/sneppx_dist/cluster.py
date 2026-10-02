@@ -209,6 +209,10 @@ class Cluster:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
+    def to_dict(self):
+        """Return cluster config as a plain dict (ready for JSON serialization)."""
+        return dict(self._data) if self._data else {}
+
     def validate(self):
         """Validate cluster config. Returns list of issues (empty if valid)."""
         issues = []
