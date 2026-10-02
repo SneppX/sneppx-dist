@@ -209,6 +209,21 @@ class Cluster:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
+    def validate(self):
+        """Validate cluster config. Returns list of issues (empty if valid)."""
+        issues = []
+        if self._data is None:
+            return ["no config; run init first"]
+        if self._data.get("world_size", 0) < 1:
+            issues.append("world_size must be >= 1")
+        if self._data.get("backend") not in _BACKENDS:
+            issues.append(f"unknown backend: {self._data.get('backend')}")
+        if not (1024 <= self._data.get("master_port", 0) <= 65535):
+            issues.append("master_port must be in [1024, 65535]")
+        if self._data.get("state") not in _STATES:
+            issues.append(f"unknown state: {self._data.get('state')}")
+        return issues
+
     # -- helpers ------------------------------------------------------------
 
     def __repr__(self):
